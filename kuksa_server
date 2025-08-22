@@ -1,0 +1,206 @@
+import asyncio                                                                                                                                                                          
+import websockets                                                                                                                                                                       
+import json                                                                                                                                                                             
+import logging                                                                                                                                                                          
+import signal                                                                                                                                                                           
+import sys                                                                                                                                                                              
+from datetime import datetime                                                                                                                                                           
+import uuid                                                                                                                                                                             
+                                                                                                                                                                                        
+# Configure logging                                                                                                                                                                     
+logging.basicConfig(                                                                                                                                                                    
+    level=logging.INFO,                                                                                                                                                                 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'                                                                                                                       
+)                                                                                                                                                                                       
+logger = logging.getLogger('KuksaServer')                                                                                                                                               
+                                                                                                                                                                                        
+class KuksaServer:                                                                                                                                                                      
+    def __init__(self, host='192.168.88.78', port=8888):                                                                                                                                
+        self.host = host                                                                                                                                                                
+        self.port = port                                                                                                                                                                
+        self.running = False                                                                                                                                                            
+        self.clients = set()                                                                                                                                                            
+        self.signals = {}  # Store vehicle signals                                                                                                                                      
+                                                                                                                                                                                        
+        # Initialize some sample VSS signals                                                                                                                                            
+        self.signals = {                                                                                                                                                                
+            'Vehicle.Speed': {'value': 0.0, 'timestamp': None},                                                                                                                         
+            'Vehicle.Engine.RPM': {'value': 0, 'timestamp': None},                                                                                                                      
+            'Vehicle.Body.Lights.Beam.High.IsOn': {'value': False, 'timestamp': None},                                                                                                  
+            'Vehicle.Cabin.HVAC.Station.Row1.Left.Temperature': {'value': 20.0, 'timestamp': None}                                                                                      
+        }                                                                                                                                                                               
+                                                                                                                                                                                        
+    def generate_timestamp(self):                                                                                                                                                       
+        return datetime.utcnow().isoformat() + 'Z' 
+async def handle_client(self, websocket, path):                                                                                                                                     
+        client_addr = websocket.remote_address                                                                                                                                          
+        logger.info(f'Client connected from {client_addr}')                                                                                                                             
+        self.clients.add(websocket)                                                                                                                                                     
+                                                                                                                                                                                        
+        try:                                                                                                                                                                            
+            async for message in websocket:                                                                                                                                             
+                await self.process_message(websocket, message)                                                                                                                          
+        except websockets.exceptions.ConnectionClosed:                                                                                                                                  
+            logger.info(f'Client {client_addr} disconnected')                                                                                                                           
+        except Exception as e:                                                                                                                                                          
+            logger.error(f'Error handling client {client_addr}: {e}')                                                                                                                   
+        finally:                                                                                                                                                                        
+            self.clients.discard(websocket)                                                                                                                                             
+                                                                                                                                                                                        
+    async def process_message(self, websocket, message):                                                                                                                                
+        try:                                                                                                                                                                            
+            # Try to parse as JSON                                                                                                                                                      
+            try:                                                                                                                                                                        
+                data = json.loads(message)                                                                                                                                              
+                response = await self.handle_kuksa_request(data)                                                                                                                        
+            except json.JSONDecodeError:                                                                                                                                                
+                # Handle plain text messages                                                                                                                                            
+                response = await self.handle_text_message(message)                                                                                                                      
+                                                                                                                                                                                        
+            await websocket.send(json.dumps(response) if isinstance(response, dict) else response)                                                                                      
+                                                                                                                                                                                        
+        except Exception as e:                                                                                                                                                          
+            logger.error(f'Error processing message: {e}')                                                                                                                              
+            error_response = {                                                                                                                                                          
+                'error': 'Internal server error',                                                                                                                                       
+                'message': str(e),                                                                                                                                                      
+                'timestamp': self.generate_timestamp()                                                                                                                                  
+            }                                                                                                                                                                           
+            await websocket.send(json.dumps(error_response)) 
+async def handle_kuksa_request(self, data):                                                                                                                                         
+        """Handle KUKSA.val protocol requests"""                                                                                                                                        
+        action = data.get('action', '').lower()                                                                                                                                         
+        path = data.get('path', '')                                                                                                                                                     
+        request_id = data.get('requestId', str(uuid.uuid4()))                                                                                                                           
+                                                                                                                                                                                        
+        if action == 'get':                                                                                                                                                             
+            return await self.handle_get(path, request_id)                                                                                                                              
+        elif action == 'set':                                                                                                                                                           
+            value = data.get('value')                                                                                                                                                   
+            return await self.handle_set(path, value, request_id)                                                                                                                       
+        elif action == 'subscribe':                                                                                                                                                     
+            return await self.handle_subscribe(path, request_id)                                                                                                                        
+        else:                                                                                                                                                                           
+            return {                                                                                                                                                                    
+                'error': 'Unknown action',                                                                                                                                              
+                'action': action,                                                                                                                                                       
+                'requestId': request_id,                                                                                                                                                
+                'timestamp': self.generate_timestamp()                                                                                                                                  
+            }                                                                                                                                                                           
+                                                                                                                                                                                        
+    async def handle_text_message(self, message):                                                                                                                                       
+        """Handle simple text messages for testing"""                                                                                                                                   
+        if message.lower() == 'ping':                                                                                                                                                   
+            return 'pong'                                                                                                                                                               
+        elif message.lower() == 'status':                                                                                                                                               
+            return f'KUKSA Server running. Signals: {len(self.signals)}, Clients: {len(self.clients)}'                                                                                  
+        elif message.lower() == 'list':                                                                                                                                                 
+            return json.dumps(list(self.signals.keys()))                                                                                                                                
+        else:                                                                                                                                                                           
+            return f'Echo: {message}' 
+async def handle_get(self, path, request_id):                                                                                                                                       
+        """Handle GET requests for vehicle signals"""                                                                                                                                   
+        if path in self.signals:                                                                                                                                                        
+            signal_data = self.signals[path]                                                                                                                                            
+            return {                                                                                                                                                                    
+                'action': 'get',                                                                                                                                                        
+                'path': path,                                                                                                                                                           
+                'value': signal_data['value'],                                                                                                                                          
+                'timestamp': signal_data['timestamp'] or self.generate_timestamp(),                                                                                                     
+                'requestId': request_id                                                                                                                                                 
+            }                                                                                                                                                                           
+        else:                                                                                                                                                                           
+            return {                                                                                                                                                                    
+                'error': 'Path not found',                                                                                                                                              
+                'path': path,                                                                                                                                                           
+                'requestId': request_id,                                                                                                                                                
+                'timestamp': self.generate_timestamp()                                                                                                                                  
+            } 
+async def handle_set(self, path, value, request_id):                                                                                                                                
+        """Handle SET requests for vehicle signals"""                                                                                                                                   
+        timestamp = self.generate_timestamp()                                                                                                                                           
+                                                                                                                                                                                        
+        # Allow setting any path for demonstration                                                                                                                                      
+        self.signals[path] = {                                                                                                                                                          
+            'value': value,                                                                                                                                                             
+            'timestamp': timestamp                                                                                                                                                      
+        }                                                                                                                                                                               
+                                                                                                                                                                                        
+        logger.info(f'Signal updated: {path} = {value}')                                                                                                                                
+                                                                                                                                                                                        
+        return {                                                                                                                                                                        
+            'action': 'set',                                                                                                                                                            
+            'path': path,                                                                                                                                                               
+            'value': value,                                                                                                                                                             
+            'timestamp': timestamp,                                                                                                                                                     
+            'requestId': request_id                                                                                                                                                     
+        }    
+
+async def handle_subscribe(self, path, request_id):                                                                                                                                 
+        """Handle SUBSCRIBE requests (simplified)"""                                                                                                                                    
+        return {                                                                                                                                                                        
+            'action': 'subscribe',                                                                                                                                                      
+            'path': path,                                                                                                                                                               
+            'subscriptionId': str(uuid.uuid4()),                                                                                                                                        
+            'requestId': request_id,                                                                                                                                                    
+            'timestamp': self.generate_timestamp(),                                                                                                                                     
+            'message': 'Subscription created (notifications not implemented in this demo)'                                                                                              
+        }                                                                                                                                                                               
+                                                                                                                                                                                        
+    async def start_server(self):                                                                                                                                                       
+        """Start the KUKSA server"""                                                                                                                                                    
+        self.running = True                                                                                                                                                             
+                                                                                                                                                                                        
+        # Check if port is available                                                                                                                                                    
+        try:                                                                                                                                                                            
+            server = await websockets.serve(                                                                                                                                            
+                self.handle_client,                                                                                                                                                     
+                self.host,                                                                                                                                                              
+                self.port                                                                                                                                                               
+            )                                                                                                                                                                           
+            logger.info(f'KUKSA.val server started on {self.host}:{self.port}')                                                                                                         
+            logger.info(f'WebSocket endpoint: ws://{self.host}:{self.port}')                                                                                                            
+            logger.info(f'Available signals: {list(self.signals.keys())}')                                                                                                              
+            return server                                                                                                                                                               
+        except OSError as e:                                                                                                                                                            
+            if e.errno == 98:  # Address already in use                                                                                                                                 
+                logger.error(f'Port {self.port} is already in use')                                                                                                                     
+                logger.info('Trying to find and kill existing process...')                                                                                                              
+                # This is a simplified approach - in production you'd want better process management                                                                                    
+                raise                                                                                                                                                                   
+            else:                                                                                                                                                                       
+                raise 
+def stop_server(self):                                                                                                                                                              
+        """Stop the server"""                                                                                                                                                           
+        logger.info('Stopping KUKSA server...')                                                                                                                                         
+        self.running = False                                                                                                                                                            
+                                                                                                                                                                                        
+async def main():                                                                                                                                                                       
+    server = KuksaServer()                                                                                                                                                              
+                                                                                                                                                                                        
+    # Handle shutdown signals                                                                                                                                                           
+    def signal_handler(sig, frame):                                                                                                                                                     
+        logger.info('Received shutdown signal')                                                                                                                                         
+        server.stop_server()                                                                                                                                                            
+        sys.exit(0)                                                                                                                                                                     
+                                                                                                                                                                                        
+    signal.signal(signal.SIGINT, signal_handler)                                                                                                                                        
+    signal.signal(signal.SIGTERM, signal_handler)                                                                                                                                       
+                                                                                                                                                                                        
+    try:                                                                                                                                                                                
+        ws_server = await server.start_server()                                                                                                                                         
+                                                                                                                                                                                        
+        # Keep server running                                                                                                                                                           
+        while server.running:                                                                                                                                                           
+            await asyncio.sleep(1)                                                                                                                                                      
+                                                                                                                                                                                        
+    except Exception as e:                                                                                                                                                              
+        logger.error(f'Server error: {e}')                                                                                                                                              
+        return 1                                                                                                                                                                        
+    finally:                                                                                                                                                                            
+        logger.info('Server shutdown complete')                                                                                                                                         
+        return 0                                                                                                                                                                        
+                                                                                                                                                                                        
+if __name__ == '__main__':                                                                                                                                                              
+    exit_code = asyncio.run(main())                                                                                                                                                     
+    sys.exit(exit_code)      
